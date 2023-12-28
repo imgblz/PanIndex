@@ -1,10 +1,11 @@
 package jobs
 
 import (
-	"github.com/libsgh/PanIndex/dao"
-	"github.com/libsgh/PanIndex/module"
-	"github.com/libsgh/PanIndex/pan"
-	"github.com/libsgh/PanIndex/util"
+	"github.com/px-org/PanIndex/dao"
+	"github.com/px-org/PanIndex/module"
+	"github.com/px-org/PanIndex/pan/ali"
+	"github.com/px-org/PanIndex/pan/base"
+	"github.com/px-org/PanIndex/util"
 	"github.com/robfig/cron/v3"
 	log "github.com/sirupsen/logrus"
 )
@@ -14,7 +15,7 @@ func Run() {
 	//aliyundrive onedrive googledrive refresh token
 	util.Cron.AddFunc("0 59 * * * ?", func() {
 		for _, account := range module.GloablConfig.Accounts {
-			if account.Mode == "aliyundrive" || account.Mode == "onedrive" || account.Mode == "onedrive-cn" || account.Mode == "googledrive" || account.Mode == "pikpak" {
+			if account.Mode == "aliyundrive" || account.Mode == "aliyundrive-share" || account.Mode == "onedrive" || account.Mode == "onedrive-cn" || account.Mode == "googledrive" || account.Mode == "pikpak" {
 				dao.SyncAccountStatus(account)
 			}
 		}
@@ -22,9 +23,9 @@ func Run() {
 	//cookie有效性检测
 	util.Cron.AddFunc("0 0/1 * * * ?", func() {
 		for _, account := range module.GloablConfig.Accounts {
+			p, _ := base.GetPan(account.Mode)
 			if account.Mode == "cloud189" || account.Mode == "yun139" ||
-				account.Mode == "teambition-us" || account.Mode == "teambition" {
-				p, _ := pan.GetPan(account.Mode)
+				account.Mode == "teambition-us" || account.Mode == "teambition" || account.Mode == "123" || account.Mode == "115" {
 				status := p.IsLogin(&account)
 				if !status {
 					log.Debugf("[cron] account:%s, logout, start login...", account.Name)
@@ -32,6 +33,16 @@ func Run() {
 				} else {
 					//log.Debugf("[cron] account:%s, status ok", account.Name)
 				}
+			}
+		}
+	})
+	util.Cron.AddFunc("0 0 0 4 * ?", func() {
+		//extra jobs, eg:sign
+		for _, account := range module.GloablConfig.Accounts {
+			p, _ := base.GetPan(account.Mode)
+			if account.Mode == "aliyundrive" {
+				//aliyundrive sign
+				p.(ali.Ali).SignActivity(account)
 			}
 		}
 	})

@@ -3,11 +3,12 @@ package control
 import (
 	"fmt"
 	"github.com/gin-gonic/gin"
-	"github.com/libsgh/PanIndex/control/middleware"
-	"github.com/libsgh/PanIndex/module"
-	"github.com/libsgh/PanIndex/pan"
-	"github.com/libsgh/PanIndex/service"
-	"github.com/libsgh/PanIndex/util"
+	"github.com/px-org/PanIndex/control/middleware"
+	"github.com/px-org/PanIndex/module"
+	_115 "github.com/px-org/PanIndex/pan/115"
+	"github.com/px-org/PanIndex/pan/googledrive"
+	"github.com/px-org/PanIndex/service"
+	"github.com/px-org/PanIndex/util"
 	log "github.com/sirupsen/logrus"
 	"net/http"
 	"net/url"
@@ -165,14 +166,17 @@ func download(ac module.Account, fileNode module.FileNode, c *gin.Context) {
 }
 
 func DataRroxy(ac module.Account, downUrl, fileName string, c *gin.Context) {
-	client := util.GetClient(20)
+	client := util.GetClient(0)
 	req, err := http.NewRequest("GET", downUrl, nil)
 	reqRange := c.GetHeader("Range")
 	if reqRange != "" {
 		req.Header.Add("Range", c.GetHeader("Range"))
 	}
 	if ac.Mode == "googledrive" {
-		req.Header.Add("Authorization", "Bearer "+pan.GoogleDrives[ac.Id].AccessToken)
+		req.Header.Add("Authorization", "Bearer "+googledrive.GoogleDrives[ac.Id].AccessToken)
+	} else if ac.Mode == "115" {
+		req.Header.Add("Cookie", ac.Password)
+		req.Header.Add("User-Agent", _115.UA)
 	}
 	response, err := client.Do(req)
 	defer func() {

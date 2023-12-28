@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="zh-cmn-Hans">
+<html>
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, shrink-to-fit=no"/>
 	<meta name="renderer" content="webkit"/>
-	{{- if or (eq $.account.Mode "aliyundrive") ($.search_key)}}
+	{{- if or (eq $.account.Mode "aliyundrive") (eq $.account.Mode "aliyundrive-share") ($.search_key)}}
 	<meta name="referrer" content="no-referrer">
 	{{- end}}
 	<meta name="force-rendering" content="webkit"/>
@@ -13,8 +13,8 @@
 	<link rel="icon" href="{{$.config.FaviconUrl}}" type="image/x-icon" />
 	<link rel="shortcut icon" href="{{$.config.FaviconUrl}}" type="image/x-icon" />
 	{{- else}}
-	<link rel="icon" href="/static/img/favicon-{{$.account.Mode}}.ico" type="image/x-icon" />
-	<link rel="shortcut icon" href="/static/img/favicon-{{$.account.Mode}}.ico" type="image/x-icon" />
+	<link rel="icon" href="{{$.config.PathPrefix}}/static/img/favicon-{{$.account.Mode}}.ico" type="image/x-icon" />
+	<link rel="shortcut icon" href="{{$.config.PathPrefix}}/static/img/favicon-{{$.account.Mode}}.ico" type="image/x-icon" />
 	{{- end}}
 	<link rel="stylesheet" href="{{index $.config.CdnFiles "mdui@css"}}"/>
 	<link rel="stylesheet" href="{{index $.config.CdnFiles "viewer@css"}}">
@@ -25,10 +25,12 @@
 	<script src="{{index $.config.CdnFiles "marked@js"}}"></script>
 	<script src="{{index $.config.CdnFiles "viewer@js"}}"></script>
 	<script src="{{index $.config.CdnFiles "clipboard@js"}}"></script>
+	<script src="{{$.config.PathPrefix}}/api/v3/public/config.js"></script>
 	<script src="{{index $.config.CdnFiles "mdui@index@js"}}?v={{$.version}}"></script>
 	{{- if ne $.config.Js ""}}
 	{{$.config.Js | unescaped}}
 	{{- end}}
+	<link rel="stylesheet" href="{{index $.config.CdnFiles  "Material+Icons@css"}}">
 	<link rel="stylesheet" href="{{index $.config.CdnFiles "mdui@index@css"}}?v={{$.version}}">
 	{{- if ne $.config.Css ""}}
 	{{$.config.Css | unescaped}}
@@ -77,14 +79,20 @@
 						{{ $color = "orange" }}
 						{{- else if eq $a.Mode "pikpak" }}
 						{{ $color = "indigo" }}
+						{{- else if eq $a.Mode "123" }}
+						{{ $color = "light-blue" }}
+						{{- else if eq $a.Mode "115" }}
+						{{ $color = "blue-900" }}
+						{{- else if eq $a.Mode "aliyundrive-share" }}
+						{{ $color = "deep-purple-accent" }}
 						{{- end}}
 						<li class="mdui-menu-item">
-							<a href="/{{.Name}}" class="mdui-ripple"><i class="mdui-menu-item-icon mdui-icon material-icons mdui-text-color-{{$color}}">face</i>{{.Name}}</a>
+							<a href="{{$.config.PathPrefix}}/{{.Name}}" class="mdui-ripple"><i class="mdui-menu-item-icon mdui-icon material-icons mdui-text-color-{{$color}}">face</i>{{.Name}}</a>
 						</li>
 						{{- end}}
 					</ul>
 					{{- end}}
-					<span class="mdui-chip-title" onclick="window.open('/','_self')">
+					<span class="mdui-chip-title" onclick="window.open('{{$.config.PathPrefix}}/','_self')">
 						{{- if eq $.config.SiteName ""}}
 							{{$.title}}
 						{{- else}}
@@ -96,13 +104,13 @@
 					{{- if and (eq (len $.accounts) 1) (eq $.config.AccountChoose "default")}}
 						{{- if gt $i 0}}
 							<i class="mdui-icon material-icons mdui-icon-dark nav">chevron_right</i>
-							<div class="mdui-chip nav" onclick="window.open('{{$a.PathUrl}}','_self')">
+							<div class="mdui-chip nav" onclick="window.open('{{$.config.PathPrefix}}{{$a.PathUrl}}','_self')">
 								<span class="mdui-chip-title mdui-text-truncate" style="max-width: 200px;" title="{{$a.PathName}}">{{$a.PathName}}</span>
 							</div>
 						{{- end}}
 					{{- else}}
 						<i class="mdui-icon material-icons mdui-icon-dark nav">chevron_right</i>
-						<div class="mdui-chip nav" onclick="window.open('{{$a.PathUrl}}','_self')">
+						<div class="mdui-chip nav" onclick="window.open('{{$.config.PathPrefix}}{{$a.PathUrl}}','_self')">
 							<span class="mdui-chip-title mdui-text-truncate" style="max-width: 200px;" title="{{$a.PathName}}">{{$a.PathName}}</span>
 						</div>
 					{{- end}}
@@ -116,9 +124,9 @@
 				</div>
 				<hr class="readme" />
 				<script>
-					var fullUrl = encodeURI(window.location.protocol + "//"+window.location.host + "/api/v3/public/raw{{$.account_path}}{{$.path}}/HEAD.md");
+					var fullUrl = encodeURI(window.location.protocol + "//"+window.location.host + "{{$.config.PathPrefix}}/api/v3/public/raw{{$.account_path}}{{$.path}}/HEAD.md");
 					if("{{$.path}}" == "/"){
-						fullUrl = encodeURI(window.location.protocol + "//"+window.location.host + "/api/v3/public/raw{{$.account_path}}{{$.path}}HEAD.md");
+						fullUrl = encodeURI(window.location.protocol + "//"+window.location.host + "{{$.config.PathPrefix}}/api/v3/public/raw{{$.account_path}}{{$.path}}HEAD.md");
 					}
 					var hKey = md5(fullUrl);
 					var hc = localStorage.getItem(hKey);
@@ -145,7 +153,7 @@
 							</div>
 							<div>
 								{{- if $.has_parent}}
-								<button class="mdui-btn mdui-btn-icon" mdui-tooltip="{content: '返回上级目录'}" onclick="window.open('{{$.parent_path}}','_self')"><i class="mdui-icon material-icons">arrow_back</i></button>
+								<button class="mdui-btn mdui-btn-icon" mdui-tooltip="{content: '返回上级目录'}" onclick="window.open('{{$.config.PathPrefix}}{{$.parent_path}}','_self')"><i class="mdui-icon material-icons">arrow_back</i></button>
 								{{- end}}
 								<ul class="mdui-menu mdui-menu-cascade" id="sort-menu" style="max-width: 220px;max-height: 500px;">
 									<li class="mdui-menu-item">
@@ -204,7 +212,9 @@
 								<button class="mdui-btn mdui-btn-icon" mdui-tooltip="{content: '排序'}" mdui-menu="{target: '#sort-menu',position:'bottom'}"><i class="mdui-icon material-icons">sort</i></button>
 								<button id="previewImages" class="mdui-btn mdui-btn-icon" mdui-tooltip="{content: '预览本页所有图片'}"><i class="mdui-icon material-icons">panorama_wide_angle</i></button>
 								{{- if $.has_parent}}
+								{{- if $.is_admin_login}}
 								<a id="share" href="javascript:void(0)" mdui-menu="{target: '#share-menu',covered: false}" class="mdui-btn mdui-btn-icon" mdui-tooltip="{content: '分享'}"><i class="mdui-icon material-icons">share</i></a>
+								{{- end}}
 								<ul id="share-menu" class="mdui-menu" data-fp="{{ $.full_path }}" data-file-type="0" data-aid="{{ $.account.Id }}">
 									<li class="mdui-divider"></li>
 									<li class="mdui-menu-item">
@@ -246,7 +256,7 @@
 				{{- if not $.fns}}
 				<div id="emptyList" class="mdui-valign" style="height: 500px;display:none!important">
 					<div class="mdui-center">
-						<img class="mdui-center" src="/static/img/empty-folder.png" style="width: 53px;height: 56px">
+						<img class="mdui-center" src="{{$.config.PathPrefix}}/static/img/empty-folder.png" style="width: 53px;height: 56px">
 						<p class="mdui-center">网盘空空如也</p>
 					</div>
 				</div>
@@ -254,7 +264,7 @@
 				{{if ne $.layout "view_comfy"}}
 				<div class="mdui-row-md-9 mdui-grid-list">
 					{{- range $.fns}}
-					<div class="mdui-col icon-file-mdui" data-folder="{{.IsFolder}}" data-file-id="{{.FileId}}" data-file-type="{{.FileType}}" data-preview="{{$.config.EnablePreview}}" data-view-type="{{.ViewType}}" data-title="{{.FileName}}" data-url="{{.Path}}" style="padding: 3px">
+					<div class="mdui-col icon-file-mdui" data-folder="{{.IsFolder}}" data-file-id="{{.FileId}}" data-file-type="{{.FileType}}" data-preview="{{$.config.EnablePreview}}" data-view-type="{{.ViewType}}" data-title="{{.FileName}}" data-url="{{$.config.PathPrefix}}{{.Path}}" style="padding: 3px">
 						<div class="mdui-grid-tile mdui-card mdui-hoverable">
 							<div class="mdui-card-media mdui-text-center">
 								{{- if and (.Thumbnail) (or (eq .ViewType "img") (eq .ViewType "video"))}}
@@ -271,15 +281,15 @@
 				{{- else}}
 				{{- range $.fns}}
 				<li class="mdui-list-item mdui-ripple">
-					<div class="mdui-list-item-content icon-file-mdui" data-folder="{{.IsFolder}}" data-file-id="{{.FileId}}" data-file-type="{{.FileType}}" data-preview="{{$.config.EnablePreview}}" data-view-type="{{.ViewType}}" data-title="{{.FileName}}" data-url="{{.Path}}">
+					<div class="mdui-list-item-content icon-file-mdui" data-folder="{{.IsFolder}}" data-file-id="{{.FileId}}" data-file-type="{{.FileType}}" data-preview="{{$.config.EnablePreview}}" data-view-type="{{.ViewType}}" data-title="{{.FileName}}" data-url="{{$.config.PathPrefix}}{{.Path}}">
 						<div class="mdui-list-item-title wordWrap">
 							{{- if .IsFolder}}
 							<i class="mdui-icon material-icons" style="margin: -3px 5px 0px 0px;">folder_open</i> {{.FileName}}
 							{{- else}}
 							<i class="mdui-icon material-icons" style="margin: -3px 5px 0px 0px;">
 								{{iconclass .IsFolder .FileType}}
-							</i> {{.FileName}} <a href="javascript:void(0)" data-path="{{.Path}}" data-clipboard-action="copy" class="copyBtn mdui-icon material-icons mdui-text-color-theme-icon" mdui-tooltip="{content: '复制链接'}" style="font-size: x-small">content_copy</a>
-							<a href="{{.Path}}" class="mdui-float-right mdui-icon material-icons mdui-text-color-theme-icon" style="font-size: 30px">file_download</a>
+							</i> {{.FileName}} <a href="javascript:void(0)" data-path="{{$.config.PathPrefix}}{{.Path}}" data-clipboard-action="copy" class="copyBtn mdui-icon material-icons mdui-text-color-theme-icon" mdui-tooltip="{content: '复制链接'}" style="font-size: x-small">content_copy</a>
+							<a href="{{$.config.PathPrefix}}{{.Path}}" class="mdui-float-right mdui-icon material-icons mdui-text-color-theme-icon" style="font-size: 30px">file_download</a>
 							{{- end}}
 						</div>
 						{{- if .IsFolder}}
@@ -290,7 +300,7 @@
 						{{- end}}
 						{{- if $.search_key}}
 						<div class="mdui-list-item-text mdui-list-item-one-line">
-							{{.Path}}
+							{{$.config.PathPrefix}}{{.Path}}
 						</div>
 						{{- end}}
 					</div>
@@ -308,9 +318,9 @@
 			</div>
 			<hr class="readme" />
 			<script>
-				var fullUrl = encodeURI(window.location.protocol + "//"+window.location.host + "/api/v3/public/raw{{$.account_path}}{{$.path}}/README.md");
+				var fullUrl = encodeURI(window.location.protocol + "//"+window.location.host + "{{$.config.PathPrefix}}/api/v3/public/raw{{$.account_path}}{{$.path}}/README.md");
 				if("{{$.path}}" == "/"){
-					fullUrl = encodeURI(window.location.protocol + "//"+window.location.host + "/api/v3/public/raw{{$.account_path}}{{$.path}}README.md");
+					fullUrl = encodeURI(window.location.protocol + "//"+window.location.host + "{{$.config.PathPrefix}}/api/v3/public/raw{{$.account_path}}{{$.path}}README.md");
 				}
 				var key = md5(fullUrl);
 				var c = localStorage.getItem(key);
@@ -332,9 +342,9 @@
 	{{- if not $.has_pwd}}
 	<a id="go-to-top" href="javascript:void(0)" class="mdui-fab mdui-fab-fixed mdui-ripple mdui-btn-dense" style="font-size: x-small"><i class="mdui-icon material-icons">vertical_align_top</i></a>
 	{{- end}}
-	<div class="mdui-text-center mdui-typo">
+	<div class="mdui-text-center mdui-typo footer">
 		{{- if eq $.config.Footer ""}}
-		©2021 <a href="https://github.com/libsgh/PanIndex" target="_blank">PanIndex</a>. All rights reserved.
+		©{{Year}} <a href="https://github.com/px-org/PanIndex" target="_blank">PanIndex</a>. All rights reserved.
 		{{- else}}
 		{{$.config.Footer | unescaped}}
 		{{- end}}

@@ -2,10 +2,15 @@ package control
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/libsgh/PanIndex/dao"
-	"github.com/libsgh/PanIndex/pan"
-	"github.com/libsgh/PanIndex/service"
-	"github.com/libsgh/PanIndex/util"
+	jsoniter "github.com/json-iterator/go"
+	"github.com/px-org/PanIndex/control/middleware"
+	"github.com/px-org/PanIndex/dao"
+	"github.com/px-org/PanIndex/module"
+	"github.com/px-org/PanIndex/pan/ali"
+	_alishare "github.com/px-org/PanIndex/pan/alishare"
+	"github.com/px-org/PanIndex/pan/base"
+	"github.com/px-org/PanIndex/service"
+	"github.com/px-org/PanIndex/util"
 	"net/http"
 	"strings"
 )
@@ -20,31 +25,27 @@ func ExchangeToken(c *gin.Context) {
 	c.String(http.StatusOK, tokenInfo)*/
 }
 
-//short url & qrcode
-func ShortInfo(c *gin.Context) {
-	path := c.PostForm("path")
-	prefix := c.PostForm("prefix")
-	url, qrCode, msg := service.ShortInfo(path, prefix)
-	c.JSON(http.StatusOK, gin.H{
-		"short_url": url,
-		"qr_code":   qrCode,
-		"msg":       msg,
-	})
-}
-
-//aliyundrive transcode
+// aliyundrive transcode
 func AliTranscode(c *gin.Context) {
 	accountId := c.Query("accountId")
 	fileId := c.Query("fileId")
 	account := dao.GetAccountById(accountId)
-	p, _ := pan.GetPan(account.Mode)
-	result, _ := p.(*pan.Ali).Transcode(account, fileId)
+	p, _ := base.GetPan(account.Mode)
+	var result string
+	if pan, ok := p.(*ali.Ali); ok {
+		result, _ = pan.Transcode(account, fileId)
+	} else {
+		result, _ = p.(*_alishare.AliShare).Transcode(account, fileId)
+	}
 	c.String(http.StatusOK, result)
 	c.Abort()
 }
 
 func Raw(c *gin.Context) {
 	p := c.Param("path")
+	if strings.HasPrefix(p, module.GloablConfig.PathPrefix) {
+		p = strings.TrimPrefix(p, module.GloablConfig.PathPrefix)
+	}
 	hasPwd := c.GetBool("has_pwd")
 	if hasPwd {
 		CommonResp(c, "unauthorized", 401, nil)
@@ -61,7 +62,7 @@ func Raw(c *gin.Context) {
 	if strings.HasPrefix(downloadUrl, "http") {
 		DataRroxy(account, downloadUrl, fileName, c)
 	} else {
-		pa, _ := pan.GetPan(account.Mode)
+		pa, _ := base.GetPan(account.Mode)
 		fileNode, _ := pa.File(account, fileId, fullpath)
 		if account.Mode == "ftp" {
 			service.FtpDownload(account, downloadUrl, fileNode, c)
@@ -73,6 +74,14 @@ func Raw(c *gin.Context) {
 	}
 }
 
+func ConfigJS(c *gin.Context) {
+	config, _ := jsoniter.MarshalToString(gin.H{
+		"path_prefix": module.GloablConfig.PathPrefix,
+		"admin_path":  module.GloablConfig.AdminPath,
+	})
+	c.String(http.StatusOK, `var $config=%s;`, config)
+}
+
 func Files(c *gin.Context) {
 	hasPwd := c.GetBool("has_pwd")
 	if hasPwd {
@@ -80,6 +89,9 @@ func Files(c *gin.Context) {
 		return
 	}
 	path := c.PostForm("path")
+	if strings.HasPrefix(path, module.GloablConfig.PathPrefix) {
+		path = strings.TrimPrefix(path, module.GloablConfig.PathPrefix)
+	}
 	viewType := c.PostForm("viewType")
 	sColumn := c.PostForm("sortColumn")
 	sOrder := c.PostForm("sortOrder")
@@ -99,4 +111,124 @@ func CommonResp(c *gin.Context, msg string, code int, data interface{}) {
 		"data":   data,
 	})
 	c.Abort()
+}
+
+func CommonSuccessResp(c *gin.Context, msg string, data interface{}) {
+	c.JSON(http.StatusOK, gin.H{
+		"status": 0,
+		"msg":    msg,
+		"data":   data,
+	})
+	c.Abort()
+}
+
+func ConfigJson(c *gin.Context) {
+	CommonSuccessResp(c, "success", gin.H{
+		"site_name":      module.GloablConfig.SiteName,
+		"theme":          module.GloablConfig.Theme,
+		"account_choose": module.GloablConfig.AccountChoose,
+		"s_column":       module.GloablConfig.SColumn,
+		"s_order":        module.GloablConfig.SOrder,
+		"path_prefix":    module.GloablConfig.PathPrefix,
+		"favicon_url":    module.GloablConfig.FaviconUrl,
+		"footer":         module.GloablConfig.Footer,
+		"css":            module.GloablConfig.Css,
+		"js":             module.GloablConfig.Js,
+		"readme":         module.GloablConfig.Readme,
+		"head":           module.GloablConfig.Head,
+		"image":          module.GloablConfig.Image,
+		"video":          module.GloablConfig.Video,
+		"audio":          module.GloablConfig.Audio,
+		"doc":            module.GloablConfig.Doc,
+		"code":           module.GloablConfig.Code,
+		"short_action":   module.GloablConfig.ShortAction,
+	})
+}
+
+func AccountList(c *gin.Context) {
+	accounts := module.GloablConfig.Accounts
+	acs := []gin.H{}
+	for _, account := range accounts {
+		acs = append(acs, gin.H{
+			"name": account.Name,
+			"path": "/" + account.Name,
+			"mode": account.Mode,
+		})
+	}
+	CommonSuccessResp(c, "success", acs)
+}
+
+func IndexData(c *gin.Context) {
+	var fns []module.FileNode
+	var isFile bool
+	var lastFile, nextFile = "", ""
+	path := c.PostForm("path")
+	sortBy := c.PostForm("sort_by")
+	order := c.PostForm("order")
+	if strings.HasPrefix(path, module.GloablConfig.PathPrefix) {
+		path = strings.TrimPrefix(path, module.GloablConfig.PathPrefix)
+	}
+	ac, fullPath, path, _ := util.ParseFullPath(path, "")
+	middleware.PwdCheck(c, fullPath)
+	if module.GloablConfig.AccountChoose == "display" && fullPath == "/" {
+		//return account list
+		fns = service.AccountsToNodes(c.Request.Host)
+	} else {
+		fns, isFile, lastFile, nextFile = service.Index(ac, path, fullPath, sortBy, order, true)
+	}
+	noReferrer := false
+	if ac.Mode == "aliyundrive" || ac.Mode == "aliyundrive-share" {
+		noReferrer = true
+	}
+	if c.GetBool("has_pwd") {
+		c.JSON(http.StatusOK, gin.H{
+			"status": 403,
+			"msg":    c.GetString("pwd_err_msg"),
+			"data": gin.H{
+				"is_folder":   !isFile,
+				"content":     []module.FileNode{},
+				"no_referrer": noReferrer,
+				"last_file":   lastFile,
+				"next_file":   nextFile,
+				"pwd_path":    c.GetString("pwd_path"),
+			},
+		})
+		c.Abort()
+		return
+	}
+	CommonSuccessResp(c, "success", gin.H{
+		"is_folder":   !isFile,
+		"content":     fns,
+		"no_referrer": noReferrer,
+		"last_file":   lastFile,
+		"next_file":   nextFile,
+		"page_no":     1,
+		"page_size":   10,
+		"pages":       1,
+	})
+}
+func SearchData(c *gin.Context) {
+	key := c.PostForm("key")
+	fns := service.Search(key)
+	CommonSuccessResp(c, "success", gin.H{
+		"content": fns,
+	})
+}
+
+func Info(c *gin.Context) {
+	CommonSuccessResp(c, "success", gin.H{
+		"name":       "PanIndex",
+		"version":    module.VERSION,
+		"commit_sha": module.GIT_COMMIT_SHA,
+		"author":     "Libs",
+	})
+}
+
+func ShortRedirectInfo(c *gin.Context) {
+	shortCode := c.PostForm("short_code")
+	redirectUri, v := service.GetRedirectUri(shortCode)
+	CommonSuccessResp(c, "success", gin.H{
+		"redirectUri": redirectUri,
+		"v":           v,
+	})
 }

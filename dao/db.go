@@ -2,15 +2,26 @@ package dao
 
 import (
 	"errors"
+	"github.com/bluele/gcache"
 	jsoniter "github.com/json-iterator/go"
-	"github.com/libsgh/PanIndex/module"
-	"github.com/libsgh/PanIndex/pan"
-	"github.com/libsgh/PanIndex/util"
+	"github.com/px-org/PanIndex/module"
+	_115 "github.com/px-org/PanIndex/pan/115"
+	"github.com/px-org/PanIndex/pan/123"
+	"github.com/px-org/PanIndex/pan/ali"
+	"github.com/px-org/PanIndex/pan/base"
+	"github.com/px-org/PanIndex/pan/cloud189"
+	"github.com/px-org/PanIndex/pan/googledrive"
+	"github.com/px-org/PanIndex/pan/onedrive"
+	"github.com/px-org/PanIndex/pan/pikpak"
+	"github.com/px-org/PanIndex/pan/s3"
+	"github.com/px-org/PanIndex/pan/teambition"
+	"github.com/px-org/PanIndex/util"
 	uuid "github.com/satori/go.uuid"
 	log "github.com/sirupsen/logrus"
 	"github.com/smallnest/weighted"
 	"gorm.io/gorm"
 	"math/rand"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -18,10 +29,12 @@ import (
 
 var DB *gorm.DB
 var NewPassword = ""
+var NewUser = "admin"
 var DB_TYPE = "sqlite"
 var InitConfigItems = []module.ConfigItem{
-	{"site_name", "", "common"},
+	{"site_name", "PanIndex", "common"},
 	{"account_choose", "default", "common"},
+	{"path_prefix", "", "common"},
 	{"admin_user", "admin", "common"},
 	{"admin_password", "PanIndex", "common"},
 	{"s_column", "default", "common"},
@@ -34,7 +47,7 @@ var InitConfigItems = []module.ConfigItem{
 	{"js", "", "appearance"},
 	{"theme", "mdui", "appearance"},
 	{"enable_preview", "1", "view"},
-	{"image", "png,gif,jpg,bmp,jpeg,ico", "view"},
+	{"image", "png,gif,jpg,bmp,jpeg,ico,webp", "view"},
 	{"video", "mp4,mkv,m3u8,flv,avi", "view"},
 	{"audio", "mp3,wav,flac,ape", "view"},
 	{"code", "txt,go,html,js,java,json,css,lua,sh,sql,py,cpp,xml,jsp,properties,yaml,ini", "view"},
@@ -60,6 +73,9 @@ var InitConfigItems = []module.ConfigItem{
 	{"dav_user", "webdav", "dav"},
 	{"dav_password", "1234", "dav"},
 	{"proxy", "", "common"},
+	{"jwt_sign_key", uuid.NewV4().String(), "common"},
+	{"enable_download_statistics", "0", "common"},
+	{"show_download_info", "0", "common"},
 }
 
 type Db interface {
@@ -86,6 +102,7 @@ func InitDb() {
 	DB.AutoMigrate(&module.HideFiles{})
 	DB.AutoMigrate(&module.Bypass{})
 	DB.AutoMigrate(&module.BypassAccounts{})
+	DB.AutoMigrate(&module.DownloadStatistics{})
 	//init data
 	var count int64
 	err := DB.Model(module.ConfigItem{}).Count(&count).Error
@@ -94,7 +111,7 @@ func InitDb() {
 		panic(err)
 	} else if count == 0 {
 		//DB.Create(&InitConfigItems)
-		rand.Seed(time.Now().UnixNano())
+		rand.New(rand.NewSource(time.Now().UnixNano()))
 		ApiToken := strconv.Itoa(rand.Intn(10000000))
 		configItem := module.ConfigItem{K: "api_token", V: ApiToken, G: "common"}
 		DB.Create(configItem)
@@ -106,6 +123,14 @@ func InitDb() {
 		configItem.V = NewPassword
 		DB.Where("k=?", "admin_password").Updates(configItem)
 		log.Infof("reset password success, old [%s], new [%s] ", OldPassword, NewPassword)
+	}
+	if NewUser != "" {
+		configItem := module.ConfigItem{}
+		DB.Where("k=?", "admin_user").First(&configItem)
+		OldUser := configItem.V
+		configItem.V = NewUser
+		DB.Where("k=?", "admin_user").Updates(configItem)
+		log.Infof("reset user success, old [%s], new [%s] ", OldUser, configItem.V)
 	}
 	//兼容旧版本密码规则
 	UpdateOldPassword()
@@ -136,7 +161,7 @@ func SaveConfigItems(items []module.ConfigItem) {
 	}
 }
 
-//init global config
+// init global config
 func InitGlobalConfig() {
 	c := module.Config{}
 	cis := []module.ConfigItem{}
@@ -153,20 +178,29 @@ func InitGlobalConfig() {
 	c.HideFiles = GetHideFilesMap()
 	c.PwdFiles = FindPwdList()
 	c.BypassList = GetBypassList()
+	module.GloablConfig = c
 	c.CdnFiles = util.GetCdnFilesMap(c.Cdn, module.VERSION)
 	c.ShareInfoList = GetShareInfoList()
+	c.DownloadStatisticsList = GetAllDownloadStatistics()
 	module.GloablConfig = c
 	RoundRobin()
 }
 
-//share info all list
+// share info all list
 func GetShareInfoList() []module.ShareInfo {
 	shareInfoList := []module.ShareInfo{}
+	result := []module.ShareInfo{}
 	DB.Where("1 = 1").Find(&shareInfoList)
-	return shareInfoList
+	for _, info := range shareInfoList {
+		pwdfiles := []module.PwdFiles{}
+		DB.Where("file_path = ?", info.FilePath).Find(&pwdfiles)
+		info.PwdInfo = pwdfiles
+		result = append(result, info)
+	}
+	return result
 }
 
-//pwd files to map
+// pwd files to map
 func GetHideFilesMap() map[string]string {
 	m := make(map[string]string)
 	hidefiles := []module.HideFiles{}
@@ -179,7 +213,7 @@ func GetHideFilesMap() map[string]string {
 	return m
 }
 
-//hide files to map
+// hide files to map
 func GetPwdFilesMap() map[string]string {
 	m := make(map[string]string)
 	pwdfiles := []module.PwdFiles{}
@@ -192,7 +226,7 @@ func GetPwdFilesMap() map[string]string {
 	return m
 }
 
-//get pwd from full path
+// get pwd from full path
 func GetPwdFromPath(path string) ([]string, string, bool) {
 	pwdfiles := []string{}
 	pwdfile := module.PwdFiles{}
@@ -221,21 +255,21 @@ func GetPwdFromPath(path string) ([]string, string, bool) {
 	return pwdfiles, filePath, true
 }
 
-//find account by name
+// find account by name
 func FindAccountByName(name string) module.Account {
 	account := module.Account{}
 	DB.Where("name = ?", name).First(&account)
 	return account
 }
 
-//find first account by seq
+// find first account by seq
 func FindAccountBySeq(seq int) module.Account {
 	account := module.Account{}
 	DB.Where("seq = ?", seq).First(&account)
 	return account
 }
 
-//find first file by path
+// find first file by path
 func FindFileByPath(ac module.Account, path string) (module.FileNode, bool) {
 	fn := module.FileNode{}
 	ok := false
@@ -264,7 +298,7 @@ func FindFileByPath(ac module.Account, path string) (module.FileNode, bool) {
 	return fn, ok
 }
 
-//find first file  list by path
+// find first file  list by path
 func FindFileListByPath(ac module.Account, path, sortColumn, sortOrder string) []module.FileNode {
 	fns := []module.FileNode{}
 	tx := DB.Where("is_delete=0 and hide =0 and account_id=? and parent_path=?", ac.Id, path)
@@ -278,7 +312,7 @@ func FindFileListByPath(ac module.Account, path, sortColumn, sortOrder string) [
 	return fns
 }
 
-//update config
+// update config
 func UpdateConfig(config map[string]string) {
 	for key, value := range config {
 		DB.Table("config_item").Where("k=?", key).Update("v", value)
@@ -286,7 +320,7 @@ func UpdateConfig(config map[string]string) {
 	InitGlobalConfig()
 }
 
-//get config
+// get config
 func GetConfig() module.Config {
 	c := module.Config{}
 	cis := []module.ConfigItem{}
@@ -304,14 +338,14 @@ func GetConfig() module.Config {
 	return c
 }
 
-//get account
+// get account
 func GetAccountById(id string) module.Account {
 	account := module.Account{}
 	DB.Where("id = ?", id).First(&account)
 	return account
 }
 
-//delete accounts
+// delete accounts
 func DeleteAccounts(ids []string) {
 	for _, id := range ids {
 		//delete account db file
@@ -324,21 +358,43 @@ func DeleteAccounts(ids []string) {
 		//delete share info
 		DB.Model(module.ShareInfo{}).Where("1=1").Delete(si)
 		//delete login account
-		pan.RemoveLoginAccount(id)
+		//base.RemoveLoginAccount(id)
 		// refresh global config
 		InitGlobalConfig()
 		//remove login account
-		pan.RemoveLoginAccount(id)
+		delete(ali.Alis, id)
+		delete(onedrive.OneDrives, id)
+		delete(teambition.TeambitionSessions, id)
+		delete(cloud189.CLoud189s, id)
+		delete(googledrive.GoogleDrives, id)
+		delete(s3.S3s, id)
+		delete(pikpak.Pikpaks, id)
+		delete(_123.Sessions, id)
+		delete(_115.Sessions, id)
 	}
 }
 
-//Loop add files
+var RetryTasksCache = gcache.New(100000).LRU().Build()
+
+type RetryTask struct {
+	account      module.Account
+	fileId, path string
+	hide, hasPwd int
+}
+
+// Loop add files
 func LoopCreateFiles(account module.Account, fileId, path string, hide, hasPwd int) {
-	pan, _ := pan.GetPan(account.Mode)
+	pan, _ := base.GetPan(account.Mode)
 	fileNodes, err := pan.Files(account, fileId, path, "default", "null")
 	if err != nil {
-		log.Warningf("%s get files error", account.Mode)
-		log.Errorln(err)
+		if err.Error() == "flow limit" {
+			log.Debugf("%s need retry， err：%v", path, err)
+			//加入重试
+			RetryTasksCache.Set(account.Id+fileId, RetryTask{account, fileId, path, hide, hasPwd})
+		} else {
+			log.Warningf("%s get files error", account.Mode)
+			log.Errorln(err)
+		}
 	}
 	for _, fn := range fileNodes {
 		FileNodeAuth(&fn, hide, hasPwd)
@@ -347,14 +403,21 @@ func LoopCreateFiles(account module.Account, fileId, path string, hide, hasPwd i
 		}
 	}
 	if len(fileNodes) > 0 {
-		DB.Create(&fileNodes)
+		//避免但文件夹文件过多导致同步失败
+		groupNodes := util.Group(fileNodes, 500)
+		for _, nodes := range groupNodes {
+			DB.Create(&nodes)
+		}
+	}
+	if len(fileNodes) > 0 || (len(fileNodes) == 0 && err == nil) {
+		RetryTasksCache.Remove(account.Id + fileId)
 	}
 }
 
-//sync account status
+// sync account status
 func SyncAccountStatus(account module.Account) {
 	DB.Table("account").Where("id=?", account.Id).Update("cookie_status", -1)
-	pan, _ := pan.GetPan(account.Mode)
+	pan, _ := base.GetPan(account.Mode)
 	auth, err := pan.AuthLogin(&account)
 	if err == nil && auth != "" {
 		log.Debugf("[%s] %s auth login success", account.Mode, account.Name)
@@ -365,9 +428,10 @@ func SyncAccountStatus(account module.Account) {
 		log.Errorf("[%s] %s auth login fail, api return : %s", account.Mode, account.Name, auth)
 		DB.Table("account").Where("id=?", account.Id).Update("cookie_status", 4)
 	}
+	InitGlobalConfig()
 }
 
-//sync files cache
+// sync files cache
 var SYNC_STATUS = 0
 
 func SyncFilesCache(account module.Account) {
@@ -383,6 +447,8 @@ func SyncFilesCache(account module.Account) {
 		}
 		//cache new files
 		LoopCreateFiles(account, account.RootId, syncDir, 0, 0)
+		//retry
+		LoopRetryTasks(account.Id)
 		//handle old files && update account status
 		var fileNodeCount int64
 		DB.Model(&module.FileNode{}).Where("account_id=? and is_delete=1", account.Id).Count(&fileNodeCount)
@@ -409,6 +475,25 @@ func SyncFilesCache(account module.Account) {
 	}
 	InitGlobalConfig()
 	SYNC_STATUS = 0
+}
+
+func LoopRetryTasks(accountId string) {
+	ks := []string{}
+	for _, key := range RetryTasksCache.Keys(false) {
+		if strings.HasPrefix(key.(string), accountId) {
+			ks = append(ks, key.(string))
+		}
+	}
+	for _, k := range ks {
+		rt, _ := RetryTasksCache.Get(k)
+		retryTask := rt.(RetryTask)
+		time.Sleep(time.Duration(1) * time.Second)
+		LoopCreateFiles(retryTask.account, retryTask.fileId, retryTask.path, retryTask.hide, retryTask.hasPwd)
+		log.Debugf("retry path: %s，剩余：%d", retryTask.path, len(ks))
+	}
+	if len(ks) > 0 {
+		LoopRetryTasks(accountId)
+	}
 }
 
 func RefreshFileNodes(accountId, fileId string) {
@@ -444,7 +529,7 @@ func GetAllNodes(tmpList, list *[]module.FileNode) {
 	}
 }
 
-//sort accounts
+// sort accounts
 func SortAccounts(ids []string) {
 	for i, id := range ids {
 		i++
@@ -453,7 +538,7 @@ func SortAccounts(ids []string) {
 	InitGlobalConfig()
 }
 
-//get file id by path
+// get file id by path
 func GetFileIdByPath(accountId, path string) string {
 	fn := module.FileNode{}
 	if path == "/" {
@@ -465,7 +550,7 @@ func GetFileIdByPath(accountId, path string) string {
 	}
 }
 
-//save hide file
+// save hide file
 func SaveHideFile(filePath string) {
 	hideFile := module.HideFiles{FilePath: filePath}
 	err := DB.Where("file_path=?", filePath).First(&module.HideFiles{}).Error
@@ -475,7 +560,7 @@ func SaveHideFile(filePath string) {
 	InitGlobalConfig()
 }
 
-//delete hide file
+// delete hide file
 func DeleteHideFiles(filePaths []string) {
 	for _, filePath := range filePaths {
 		c := DB.Where("file_path=?", filePath).Delete(&module.HideFiles{}).RowsAffected
@@ -484,10 +569,16 @@ func DeleteHideFiles(filePaths []string) {
 	InitGlobalConfig()
 }
 
-//save pwd file
+// save pwd file
 func SavePwdFile(pwdFile module.PwdFiles) {
 	if pwdFile.Password == "" {
 		pwdFile.Password = util.RandomPassword(8)
+	}
+	decodedPath, err := url.QueryUnescape(pwdFile.FilePath)
+	if err != nil {
+		log.Error(err)
+	} else {
+		pwdFile.FilePath = decodedPath
 	}
 	if pwdFile.Id != "" {
 		DB.Table("pwd_files").Where("id=?", pwdFile.Id).Updates(pwdFile)
@@ -497,7 +588,7 @@ func SavePwdFile(pwdFile module.PwdFiles) {
 	}
 }
 
-//delete hide file
+// delete hide file
 func DeletePwdFiles(delIds []string) {
 	for _, id := range delIds {
 		c := DB.Where("id=?", id).Delete(&module.PwdFiles{}).RowsAffected
@@ -540,7 +631,7 @@ func SaveBypass(bypass module.Bypass) string {
 				return "保存失败，网盘已被其他分流绑定！"
 			}
 		}
-		DB.Where("id=?", bypass.Id).Updates(&bypass)
+		DB.Where("id=?", bypass.Id).Save(&bypass)
 	} else {
 		err := DB.Where("name=?", bypass.Name).First(&module.Bypass{}).Error
 		if err == nil {
@@ -775,4 +866,64 @@ func SelectAccountsById(ids []string) []module.Account {
 	var accounts []module.Account
 	DB.Where("id IN ?", ids).Find(&accounts)
 	return accounts
+}
+
+func DeleteShareInfo(paths []string) {
+	for _, path := range paths {
+		//delete share info
+		DB.Where("file_path = ?", path).Delete(module.ShareInfo{})
+	}
+	InitGlobalConfig()
+}
+
+func DeleteStatistics(ids []string) {
+	for _, id := range ids {
+		DB.Where("id = ?", id).Delete(module.DownloadStatistics{})
+	}
+	InitGlobalConfig()
+}
+
+func SyncDownloadInfo(ac module.Account, fileNode module.FileNode) {
+	var downloadStatistics module.DownloadStatistics
+	err := DB.Where("id = ?", fileNode.FileId).First(&downloadStatistics).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		DB.Create(module.DownloadStatistics{
+			Id:               fileNode.FileId,
+			AccountName:      ac.Name,
+			FileName:         fileNode.FileName,
+			LastDownloadTime: util.UTCTime(time.Now()),
+			Path:             fileNode.Path,
+			Count:            1,
+		})
+	} else {
+		count := downloadStatistics.Count + 1
+		DB.Table("download_statistics").Where("id=?", fileNode.FileId).Update("count", count)
+	}
+	InitGlobalConfig()
+}
+
+func GetDownloadCount(fns []module.FileNode) []module.FileNode {
+	if len(fns) > 0 {
+		fn := fns[0]
+		var downloadStatistics module.DownloadStatistics
+		err := DB.Where("id = ?", fns[0].FileId).First(&downloadStatistics).Error
+		extraData := fns[0].ExtraData
+		if extraData == nil {
+			extraData = make(map[string]interface{})
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			extraData["DownloadCount"] = 0
+		} else {
+			extraData["DownloadCount"] = downloadStatistics.Count
+		}
+		fn.ExtraData = extraData
+		return []module.FileNode{fn}
+	}
+	return fns
+}
+
+func GetAllDownloadStatistics() []module.DownloadStatistics {
+	var data []module.DownloadStatistics
+	DB.Where("1=1").Find(&data)
+	return data
 }

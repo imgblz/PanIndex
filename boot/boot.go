@@ -4,13 +4,13 @@ import (
 	"embed"
 	"flag"
 	"fmt"
-	runtime "github.com/banzaicloud/logrus-runtime-formatter"
+	logrus_runtime "github.com/banzaicloud/logrus-runtime-formatter"
 	"github.com/gin-gonic/gin"
 	jsoniter "github.com/json-iterator/go"
-	"github.com/libsgh/PanIndex/dao"
-	"github.com/libsgh/PanIndex/jobs"
-	"github.com/libsgh/PanIndex/module"
-	"github.com/libsgh/PanIndex/util"
+	"github.com/px-org/PanIndex/dao"
+	"github.com/px-org/PanIndex/jobs"
+	"github.com/px-org/PanIndex/module"
+	"github.com/px-org/PanIndex/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/unrolled/secure"
 	"html/template"
@@ -105,7 +105,7 @@ func InitDb(config BootConfig) {
 	d.CreateDb(dsn)
 }
 
-//config.json > env > flag
+// config.json > env > flag
 func LoadConfig() BootConfig {
 	var Config = flag.String("c", "config.json", "config.json")
 	var Host = flag.String("host", "", "bind host, default 0.0.0.0")
@@ -118,9 +118,12 @@ func LoadConfig() BootConfig {
 	var ConfigQuery = flag.String("config_query", "", "config query new version, e.g. port")
 	var DbType = flag.String("db_type", "", "dao type, e.g. sqlite,mysql,postgres...")
 	var Dsn = flag.String("dsn", "", "database connection url")
-	var ResetPassword = flag.String("rest_password", "", "start whith new password, default:PanIndex")
+	var ResetPassword = flag.String("reset_password", "", "start whith new password, default:PanIndex")
+	var ResetUser = flag.String("reset_user", "", "start whith new user, default:admin")
+	var Ui = flag.String("ui", "", "custom ui directory, default:PanIndex executor sibling directory")
 	flag.Parse()
 	dao.NewPassword = *ResetPassword
+	dao.NewUser = *ResetUser
 	config, _ := LoadFromFile(*Config)
 	config.Host = LoadFromEnv("HOST", *Host, config.Host)
 	if config.Host == "" {
@@ -137,6 +140,7 @@ func LoadConfig() BootConfig {
 	if config.LogLevel == "" {
 		config.LogLevel = "info"
 	}
+	config.Ui = LoadFromEnv("UI", *Ui, config.Ui)
 	config.DataPath = LoadFromEnv("DATA_PATH", *DataPath, config.DataPath)
 	config.CertFile = LoadFromEnv("CERT_FILE", *CertFile, config.CertFile)
 	config.KeyFile = LoadFromEnv("KEY_FILE", *KeyFile, config.KeyFile)
@@ -216,7 +220,7 @@ func InitLog(lvl string) error {
 	} else {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	formatter := runtime.Formatter{ChildFormatter: &log.TextFormatter{
+	formatter := logrus_runtime.Formatter{ChildFormatter: &log.TextFormatter{
 		ForceColors:               true,
 		EnvironmentOverrideColors: true,
 		TimestampFormat:           "2006-01-02 15:04:05",
@@ -238,20 +242,20 @@ func InitStaticBox(r *gin.Engine, fs embed.FS) {
 	}
 }
 
-func Templates(fs embed.FS) *template.Template {
+func Templates(fs embed.FS, config BootConfig) *template.Template {
 	themes := [3]string{"mdui", "classic", "bootstrap"}
 	tmpl := template.New("")
-	templatesFileNames := []string{"base", "appearance", "common", "disk", "hide", "login", "access", "pwd", "safety", "view", "bypass", "cache", "webdav", "404"}
-	addTemplatesFromFolder("admin", tmpl, fs, templatesFileNames)
+	templatesFileNames := []string{"base", "appearance", "common", "disk", "hide", "login", "access", "pwd", "safety", "view", "bypass", "cache", "webdav", "404", "share"}
+	addTemplatesFromFolder("admin", tmpl, fs, templatesFileNames, config)
 	for _, theme := range themes {
 		theme = util.GetCurrentTheme(theme)
 		tmpFile := strings.Join([]string{"templates/pan/", "/index.html"}, theme)
 		dataBuf, _ := fs.ReadFile(tmpFile)
 		data := string(dataBuf)
-		if util.FileExist("./" + tmpFile) {
-			s, _ := ioutil.ReadFile("./" + tmpFile)
+		tmpFilePath := filepath.Join(util.ExeFilePath(config.Ui), tmpFile)
+		if util.FileExist(tmpFilePath) {
+			s, _ := ioutil.ReadFile(tmpFilePath)
 			data = string(s)
-
 		}
 		tmpl.New(tmpFile).Funcs(template.FuncMap{
 			"unescaped":    unescaped,
@@ -260,6 +264,7 @@ func Templates(fs embed.FS) *template.Template {
 			"FormateName":  FormateName,
 			"TruncateName": TruncateName,
 			"FormateUnix":  FormateUnix,
+			"Year":         Year,
 		}).Parse(data)
 	}
 	//添加详情模板
@@ -268,8 +273,9 @@ func Templates(fs embed.FS) *template.Template {
 		tmpName := fmt.Sprintf("templates/pan/%s/view-%s.html", "mdui", vt)
 		dataBuf, _ := fs.ReadFile(tmpName)
 		data := string(dataBuf)
-		if util.FileExist("./" + tmpName) {
-			s, _ := ioutil.ReadFile("./" + tmpName)
+		tmpNamePath := filepath.Join(util.ExeFilePath(config.Ui), tmpName)
+		if util.FileExist(tmpNamePath) {
+			s, _ := ioutil.ReadFile(tmpNamePath)
 			data = string(s)
 		}
 		tmpl.New(tmpName).Funcs(template.FuncMap{
@@ -284,13 +290,14 @@ func Templates(fs embed.FS) *template.Template {
 	return tmpl
 }
 
-func addTemplatesFromFolder(folder string, tmpl *template.Template, fs embed.FS, templatesFileNames []string) {
+func addTemplatesFromFolder(folder string, tmpl *template.Template, fs embed.FS, templatesFileNames []string, config BootConfig) {
 	for _, vt := range templatesFileNames {
 		tmpName := fmt.Sprintf("templates/pan/%s/%s.html", folder, vt)
 		dataBuf, _ := fs.ReadFile(tmpName)
 		data := string(dataBuf)
-		if util.FileExist("./" + tmpName) {
-			s, _ := ioutil.ReadFile("./" + tmpName)
+		tmpNamePath := filepath.Join(util.ExeFilePath(config.Ui), tmpName)
+		if util.FileExist(tmpNamePath) {
+			s, _ := ioutil.ReadFile(tmpNamePath)
 			data = string(s)
 		}
 		tmpl.New(tmpName).Funcs(template.FuncMap{
@@ -303,18 +310,6 @@ func addTemplatesFromFolder(folder string, tmpl *template.Template, fs embed.FS,
 			"FormateUnix":  FormateUnix,
 		}).Parse(data)
 	}
-}
-
-type BootConfig struct {
-	Host        string `json:"host"`
-	Port        int    `json:"port"`
-	LogLevel    string `json:"log_level"`
-	DataPath    string `json:"data_path"`
-	CertFile    string `json:"cert_file"`
-	KeyFile     string `json:"key_file"`
-	ConfigQuery string `json:"config_query"`
-	DbType      string `json:"db_type"` //dao type:sqlite,mysql,postgres
-	Dsn         string `json:"dsn"`     //dao dsn
 }
 
 func unescaped(x string) interface{} { return template.HTML(x) }
@@ -348,4 +343,21 @@ func FormateUnix(timeUnix int64) string {
 	} else {
 		return time.Unix(timeUnix, 0).Format("2006-01-02 15:04:05")
 	}
+}
+
+func Year() string {
+	return time.Now().Format("2006")
+}
+
+type BootConfig struct {
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	LogLevel    string `json:"log_level"`
+	DataPath    string `json:"data_path"`
+	CertFile    string `json:"cert_file"`
+	KeyFile     string `json:"key_file"`
+	ConfigQuery string `json:"config_query"`
+	DbType      string `json:"db_type"` //dao type:sqlite,mysql,postgres
+	Dsn         string `json:"dsn"`     //dao dsn
+	Ui          string `json:"ui"`
 }

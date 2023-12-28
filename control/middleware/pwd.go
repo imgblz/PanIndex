@@ -2,9 +2,9 @@ package middleware
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/libsgh/PanIndex/dao"
-	"github.com/libsgh/PanIndex/module"
-	"github.com/libsgh/PanIndex/util"
+	"github.com/px-org/PanIndex/dao"
+	"github.com/px-org/PanIndex/module"
+	"github.com/px-org/PanIndex/util"
 	"net/http"
 	"net/url"
 	"strings"
@@ -25,7 +25,7 @@ func Check(c *gin.Context) {
 	ThemeCheck(c)
 	LayoutCheck(c)
 	if len(module.GloablConfig.Accounts) == 0 {
-		c.Redirect(http.StatusFound, module.GloablConfig.AdminPath)
+		c.Redirect(http.StatusFound, module.GloablConfig.PathPrefix+module.GloablConfig.AdminPath)
 	}
 	c.Next()
 }

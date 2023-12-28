@@ -7,10 +7,12 @@ import (
 	"github.com/bluele/gcache"
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/gin-gonic/gin"
-	"github.com/libsgh/PanIndex/dao"
-	"github.com/libsgh/PanIndex/module"
-	"github.com/libsgh/PanIndex/pan"
-	"github.com/libsgh/PanIndex/util"
+	"github.com/px-org/PanIndex/dao"
+	"github.com/px-org/PanIndex/module"
+	"github.com/px-org/PanIndex/pan/base"
+	"github.com/px-org/PanIndex/pan/ftp"
+	"github.com/px-org/PanIndex/pan/webdav"
+	"github.com/px-org/PanIndex/util"
 	uuid "github.com/satori/go.uuid"
 	log "github.com/sirupsen/logrus"
 	"github.com/skip2/go-qrcode"
@@ -93,7 +95,7 @@ type DownUrlCacheBean struct {
 
 func GetFilesFromApi(ac module.Account, path, fullPath, sortColumn, sortOrder string) ([]module.FileNode, bool, error) {
 	var fns []module.FileNode
-	p, _ := pan.GetPan(ac.Mode)
+	p, _ := base.GetPan(ac.Mode)
 	fileId := GetFileIdByPath(ac, path, fullPath)
 	file, err := p.File(ac, fileId, fullPath)
 	isFile := false
@@ -234,7 +236,7 @@ func GetFileIdByPath(ac module.Account, path, fullPath string) string {
 
 func LoopGetFileId(ac module.Account, fileId, path, filePath string) (string, bool) {
 	fileName := util.GetFileName(path)
-	p, _ := pan.GetPan(ac.Mode)
+	p, _ := base.GetPan(ac.Mode)
 	fns, _ := p.Files(ac, fileId, util.GetParentPath(path), "", "")
 	fId, fnPath := GetCurrentId(fileName, fns)
 	if fId != "" {
@@ -277,6 +279,9 @@ type DownLock struct {
 var dls = sync.Map{}
 
 func GetDownloadUrl(ac module.Account, fileId string) string {
+	if fileId == "" {
+		return ""
+	}
 	var dl = DownLock{}
 	if _, ok := dls.Load(fileId); ok {
 		ss, _ := dls.Load(fileId)
@@ -299,7 +304,7 @@ func (dl *DownLock) GetDownlaodUrl(account module.Account, fileId string) string
 			log.Debugf("get download url from cache:%s", downloadUrl)
 		}
 	} else {
-		p, _ := pan.GetPan(account.Mode)
+		p, _ := base.GetPan(account.Mode)
 		url, err := p.GetDownloadUrl(account, fileId)
 		if err != nil {
 			log.Error(err)
@@ -310,7 +315,7 @@ func (dl *DownLock) GetDownlaodUrl(account module.Account, fileId string) string
 			if account.Mode == "aliyundrive" {
 				UrlCache.SetWithExpire(account.Id+fileId, DownUrlCacheBean{downloadUrl, cacheTime, util.GetExpireTime(cacheTime, time.Minute*230)}, time.Minute*230)
 			} else {
-				UrlCache.SetWithExpire(account.Id+fileId, DownUrlCacheBean{downloadUrl, cacheTime, util.GetExpireTime(cacheTime, time.Minute*14)}, time.Minute*14)
+				UrlCache.SetWithExpire(account.Id+fileId, DownUrlCacheBean{downloadUrl, cacheTime, util.GetExpireTime(cacheTime, time.Minute*10)}, time.Minute*10)
 			}
 			log.Debugf("get download url from api:" + downloadUrl)
 		}
@@ -318,7 +323,7 @@ func (dl *DownLock) GetDownlaodUrl(account module.Account, fileId string) string
 	return downloadUrl
 }
 
-//clear file memory cache
+// clear file memory cache
 func ClearFileCache(p string) {
 	keys := FilesCache.Keys(false)
 	for _, key := range keys {
@@ -329,7 +334,7 @@ func ClearFileCache(p string) {
 	}
 }
 
-//upload file
+// upload file
 func Upload(accountId, p string, c *gin.Context) string {
 	_, fullPath, path, _ := util.ParseFullPath(p, "")
 	form, _ := c.MultipartForm()
@@ -339,7 +344,7 @@ func Upload(accountId, p string, c *gin.Context) string {
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return "指定的账号不存在"
 	}
-	pan, _ := pan.GetPan(account.Mode)
+	pan, _ := base.GetPan(account.Mode)
 	fileId := GetFileIdByPath(account, path, fullPath)
 	if fileId == "" {
 		return "指定目录不存在"
@@ -365,7 +370,7 @@ func Upload(accountId, p string, c *gin.Context) string {
 	}
 }
 
-//sync file cache
+// sync file cache
 func Async(accountId, path string) string {
 	account := module.Account{}
 	result := dao.DB.Raw("select * from account where id=?", accountId).Take(&account)
@@ -382,7 +387,7 @@ func Async(accountId, path string) string {
 	return "刷新成功"
 }
 
-//short url & qrcode
+// short url & qrcode
 func ShortInfo(path, prefix string) (string, string, string) {
 	si := module.ShareInfo{}
 	dao.DB.Raw("select * from share_info where file_path = ?", path).First(&si)
@@ -399,21 +404,29 @@ func ShortInfo(path, prefix string) (string, string, string) {
 			log.Errorln(err)
 			return "", "", "短链生成失败"
 		}
-		shortCode = shortCodes[0]
+		for i, code := range shortCodes {
+			si = module.ShareInfo{}
+			dao.DB.Raw("select * from share_info where short_code = ?", code).First(&si)
+			if si.ShortCode == "" {
+				shortCode = shortCodes[i]
+				break
+			}
+		}
 		dao.DB.Create(module.ShareInfo{
-			path, shortCode,
+			path, shortCode, []module.PwdFiles{},
 		})
 	}
+	go dao.InitGlobalConfig()
 	shortUrl = prefix + shortCode
 	png, err := qrcode.Encode(shortUrl, qrcode.Medium, 256)
 	if err != nil {
 		panic(err)
 	}
-	dataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte(png))
+	dataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 	return shortUrl, dataURI, "短链生成成功"
 }
 
-//get file data
+// get file data
 func GetFileData(account module.Account, downUrl, r string) ([]byte, string, int) {
 	client := httpClient(r)
 	req, _ := http.NewRequest("GET", downUrl, nil)
@@ -504,7 +517,7 @@ func GetRedirectUri(shorCode string) (string, string) {
 	return redirectUri, v
 }
 
-//path: filePath
+// path: filePath
 func GetLastNextFile(ac module.Account, path, fullPath, sortColumn, sortOrder string) (string, string) {
 	var fns []module.FileNode
 	var err error
@@ -811,7 +824,7 @@ func Files(ac module.Account, path, fullPath string) []module.FileNode {
 
 func DeleteFile(ac module.Account, path, fullPath string) error {
 	//1. delete file from disk
-	disk, _ := pan.GetPan(ac.Mode)
+	disk, _ := base.GetPan(ac.Mode)
 	fileId := GetFileIdByPath(ac, path, fullPath)
 	_, _, err := disk.Remove(ac, fileId)
 	//2. delete file from cache
@@ -825,7 +838,7 @@ func DeleteFile(ac module.Account, path, fullPath string) error {
 }
 
 func GetFileFromApi(ac module.Account, path, fullPath string) (module.FileNode, error) {
-	p, _ := pan.GetPan(ac.Mode)
+	p, _ := base.GetPan(ac.Mode)
 	fileId := GetFileIdByPath(ac, path, fullPath)
 	if fileId != "" || (fileId == "" && path == "/") {
 		file, err := p.File(ac, fileId, fullPath)
@@ -858,7 +871,7 @@ func File(ac module.Account, path, fullPath string) (module.FileNode, error) {
 	return module.FileNode{}, nil
 }
 
-//webdav upload callback
+// webdav upload callback
 func UploadCall(account module.Account, file module.FileNode, overwrite bool) {
 	if account.CachePolicy == "mc" {
 		parentPath := util.GetParentPath(file.Path)
@@ -886,12 +899,12 @@ func UploadCall(account module.Account, file module.FileNode, overwrite bool) {
 	}
 }
 
-//webdav mkdir callback
+// webdav mkdir callback
 func MkdirCall(account module.Account, file module.FileNode) {
 	UploadCall(account, file, false)
 }
 
-//webdav move callback
+// webdav move callback
 func MoveCall(account module.Account, fileId, srcFullPath, dstFullPath string) {
 	UrlCache.Remove(account.Id + fileId)
 	if account.CachePolicy == "mc" {
@@ -904,7 +917,7 @@ func MoveCall(account module.Account, fileId, srcFullPath, dstFullPath string) {
 	} else if account.CachePolicy == "dc" {
 		fn := module.FileNode{}
 		dao.DB.Where("path=?", srcFullPath).First(&fn)
-		p, _ := pan.GetPan(account.Mode)
+		p, _ := base.GetPan(account.Mode)
 		newFn, _ := p.File(account, fileId, dstFullPath)
 		fn.LastOpTime = newFn.LastOpTime
 		fn.Path = newFn.Path
@@ -923,12 +936,12 @@ func MoveCall(account module.Account, fileId, srcFullPath, dstFullPath string) {
 }
 
 func FtpDownload(ac module.Account, downUrl string, fileNode module.FileNode, c *gin.Context) {
-	p, _ := pan.GetPan(ac.Mode)
+	p, _ := base.GetPan(ac.Mode)
 	statusCode := http.StatusOK
 	if c.GetHeader("Range") != "" {
 		statusCode = http.StatusPartialContent
 	}
-	r, err := p.(*pan.FTP).ReadFileReader(ac, downUrl, 0)
+	r, err := p.(*ftp.FTP).ReadFileReader(ac, downUrl, 0)
 	defer r.Close()
 	if err == nil {
 		fileName := url.QueryEscape(fileNode.FileName)
@@ -943,12 +956,12 @@ func FtpDownload(ac module.Account, downUrl string, fileNode module.FileNode, c 
 }
 
 func WebDavDownload(ac module.Account, downUrl string, fileNode module.FileNode, c *gin.Context) {
-	p, _ := pan.GetPan(ac.Mode)
+	p, _ := base.GetPan(ac.Mode)
 	statusCode := http.StatusOK
 	if c.GetHeader("Range") != "" {
 		statusCode = http.StatusPartialContent
 	}
-	r, err := p.(*pan.WebDav).ReadFileReader(ac, downUrl, 0, fileNode.FileSize)
+	r, err := p.(*webdav.WebDav).ReadFileReader(ac, downUrl, 0, fileNode.FileSize)
 	defer r.Close()
 	if err == nil {
 		fileName := url.QueryEscape(fileNode.FileName)
@@ -1013,25 +1026,26 @@ func UploadConfig(config module.Config) string {
 }
 
 func UploadPwdFile(content string) {
+	content = strings.TrimSpace(content)
 	if content != "" {
 		lines := strings.Split(content, "\n")
 		for _, line := range lines {
 			columns := strings.Split(line, "\t")
 			pwdFile := module.PwdFiles{}
-			if len(columns) > 0 {
+			if len(columns) > 0 && columns[0] != "" {
 				pwdFile.FilePath = strings.TrimSpace(columns[0])
 				if len(columns) > 1 {
-					pwdFile.Password = columns[1]
+					pwdFile.Password = strings.TrimRight(columns[1], "\r")
 				} else {
 					pwdFile.Password = util.RandomPassword(8)
 					pwdFile.ExpireAt = 0
 				}
-				if len(columns) > 2 {
-					ex, _ := time.ParseInLocation("2006-01-02 15:04:05", columns[2], time.Local)
+				if len(columns) > 2 && columns[2] != "" {
+					ex, _ := time.ParseInLocation("2006-01-02 15:04:05", strings.TrimRight(columns[2], "\r"), time.Local)
 					pwdFile.ExpireAt = ex.UTC().Unix()
 				}
-				if len(columns) > 3 {
-					pwdFile.Info = columns[3]
+				if len(columns) > 3 && columns[3] != "" {
+					pwdFile.Info = strings.TrimRight(columns[3], "\r")
 				}
 				dao.SavePwdFile(pwdFile)
 				dao.InitGlobalConfig()
@@ -1040,7 +1054,7 @@ func UploadPwdFile(content string) {
 	}
 }
 
-func ShareInfo(urlPrefix, pwdId string) string {
+func GenShareInfo(urlPrefix, pwdId string) string {
 	//1. pwd
 	pwdFile := module.PwdFiles{}
 	dao.DB.Where("id=?", pwdId).First(&pwdFile)
